@@ -1,12 +1,14 @@
 
 
 
-def read_donor_data(data_dir):
-    ## Adpated from code that K. Gorgolewski wrote
+def read_donor_data(data_dir,filter_noise=True):
+    ## Adpated from code that K. Gorgolewski wrote (alleninf) TODO: get full link to github repo
     # expanded to include well data
     # reads allen database donor data (whatever is in the dir)
-    # XXX this is the old one, pull the new one from the (older version) of the ipython file with .v3 in it
+    import pandas as pd
     from glob import glob
+    import os
+
     donor_ids = [path.split(os.path.sep)[-2] for path in glob(os.path.join(data_dir, "*", "MicroarrayExpression.csv"))]
     print "Data directory contains the following donors: %s" % ", ".join(donor_ids)
     main_df = "empty"
@@ -16,8 +18,10 @@ def read_donor_data(data_dir):
         df = pd.DataFrame([donor_id] * sample_locations.shape[0], columns=["donor_id"]) #column of donor_id
         df_well_ids = sample_locations[['well_id',"slab_type"]] #keep slab type so that we can filter on it
         df = pd.concat([df,df_well_ids],axis=1,ignore_index=False)
-        expression_data = pd.read_csv(os.path.join(data_dir, donor_id, 'MicroarrayExpression.csv'),
-                                      header=None, index_col=0)
+        expression_data = pd.read_csv(os.path.join(data_dir, donor_id, 'MicroarrayExpression.csv'), header=None, index_col=0)
+        if filter_noise: #filter to only include data above the noise floor
+            good_data = pd.read_csv(os.path.join(data_dir, donor_id, 'PACall.csv'), header=None, index_col=0)
+            expression_data[good_data == 0] = np.nan
         expression_data.columns = range(expression_data.shape[1])
         df = pd.concat([df, expression_data.T], axis=1, ignore_index=False)
         if isinstance(main_df, str):
@@ -25,6 +29,7 @@ def read_donor_data(data_dir):
         else:
             main_df = pd.concat([main_df, df], ignore_index=True)
     return main_df #now formatted by row,col sample_well_id,probe_id
+
 
 def mm2vox(aff,pts):
     #convert xyz coords from mm to voxel space coords
@@ -99,14 +104,6 @@ def get_MNI_coords(gene_expression, well2MNI_mapping, well_col_name='well_id'):
     # this works, but creates a duplicate
     # df.T.drop_duplicates().T
     return pd.concat([gene_expression, MNI_coords], axis=1)  # this ignores any ordering, assumes all ordered correctly
-    # this would return different columsn well_id_x and well_id_y
-
-
-#    return gene_expression.merge(MNI_coords,right_index=True,left_index=True)
-
-#    return gene_expression.reset_index().append(MNI_coords.reset_index())
-#    return pd.merge(gene_expression.reset_index(),MNI_coords.reset_index(),
-#                    left_on=well_col_name,right_on=well_col_name)
 
 def plot_gene_expression(gene_expression_coords, MNI_template,
                          well_col_name='well_id', expression_col_name='expression',
@@ -116,6 +113,7 @@ def plot_gene_expression(gene_expression_coords, MNI_template,
                          zscore_plotting_data=False, black_bg=False,
                          nan_val=0, plot_smoothed_data=False, donor_id=None,
                          out_dir=None):
+    # plot data with nilearn glass brain, weeeeeeee
     # flip_coords_to_left_hemisphere to put all datapoints into single hemi in case data is too sparse
 
     import nibabel as nb
@@ -223,6 +221,8 @@ def plot_gene_expression(gene_expression_coords, MNI_template,
 def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_val=0,
                                         expression_col_name="expression", summary_type="average",
                                         donor_col_name='donor_id', verbose=False):
+    # compute summary metrics in provided mask
+    # mask is 3d, but can contiain multiple ids, I think I skip zero?
     import nibabel as nb
     import pandas as pd
 
