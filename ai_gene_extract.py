@@ -105,7 +105,7 @@ def get_MNI_coords(gene_expression, well2MNI_mapping, well_col_name='well_id'):
     # df.T.drop_duplicates().T
     return pd.concat([gene_expression, MNI_coords], axis=1)  # this ignores any ordering, assumes all ordered correctly
 
-def plot_gene_expression(gene_expression_coords, MNI_template,
+def plot_gene_expression(gene_expression_coords, MNI_template=None,
                          well_col_name='well_id', expression_col_name='expression',
                          gene_symbol="XXX",
                          flip_coords_to_left_hemisphere=False,
@@ -123,6 +123,9 @@ def plot_gene_expression(gene_expression_coords, MNI_template,
     from nilearn.image import math_img
     import os
     # from scipy.stats import zscore
+
+    if MNI_template is None: #assume that we can find it here :-/
+        MNI_template = "/usr/share/fsl/5.0/data/standard/MNI152_T1_1mm_brain.nii.gz"
 
     # get MNI template
     img = nb.load(MNI_template)
