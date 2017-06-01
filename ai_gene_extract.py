@@ -512,7 +512,9 @@ def plot_genes_complex_radar(df_res,gene_symbol_col_name = "gene_symbol", zscore
     if zscored_data:
         my_range = [(-1, 1)]
     else:
-        my_range = [(np.min(plot_d.values),np.max(plot_d.values))]
+        my_range = [(0,np.nanmax(plot_d.values))]
+        print("Range: "+str((np.nanmin(plot_d.values),np.nanmax(plot_d.values))))
+
     ranges = my_range * len(plot_d[region_names[0]])
     variables = plot_d[region_names[0]].index.values  # gene names are variables, around the radar (list)
 
