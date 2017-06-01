@@ -32,9 +32,12 @@ def read_donor_data(data_dir,filter_noise=True):
 
 
 def mm2vox(aff,pts):
+    import nibabel as nb
+    import numpy as np
     #convert xyz coords from mm to voxel space coords
     return (nb.affines.apply_affine(np.linalg.inv(aff),pts)).astype(int)
 def vox2mm(aff,pts):
+    import nibabel as nb
     #convert from voxel coords space back to mm space xyz
     return nb.affines.apply_affine(aff,pts)
 
@@ -97,6 +100,7 @@ def get_gene_expression(probe_ids, df_donor_data,
 
 
 def get_MNI_coords(gene_expression, well2MNI_mapping, well_col_name='well_id'):
+    import pandas as pd
     well2MNI_mapping = well2MNI_mapping.reset_index()
     well2MNI_mapping = well2MNI_mapping.set_index(well_col_name)
     MNI_coords = well2MNI_mapping.loc[gene_expression[well_col_name]].reset_index()  # list of coords
@@ -107,7 +111,7 @@ def get_MNI_coords(gene_expression, well2MNI_mapping, well_col_name='well_id'):
 
 def plot_gene_expression(gene_expression_coords, MNI_template=None,
                          well_col_name='well_id', expression_col_name='expression',
-                         gene_symbol="XXX",
+                         gene_symbol=None, gene_symbol_col_name = "gene_symbol",
                          flip_coords_to_left_hemisphere=False,
                          add_vox_xyz=None, smoothing_kernel=5,
                          zscore_plotting_data=False, black_bg=False,
@@ -115,6 +119,7 @@ def plot_gene_expression(gene_expression_coords, MNI_template=None,
                          out_dir=None):
     # plot data with nilearn glass brain, weeeeeeee
     # flip_coords_to_left_hemisphere to put all datapoints into single hemi in case data is too sparse
+    # TODO:  average across all genes when gene symbol set to None
 
     import nibabel as nb
     import numpy as np
@@ -122,6 +127,14 @@ def plot_gene_expression(gene_expression_coords, MNI_template=None,
     from nilearn.image import smooth_img
     from nilearn.image import math_img
     import os
+
+    if gene_symbol is not None:
+        gene_expression_coords = gene_expression_coords[gene_expression_coords[gene_symbol_col_name] == gene_symbol]
+    else:
+        gene_symbol = "XXX"
+        gene_expression_coords = gene_expression_coords.T.drop_duplicates().T #remove duplicated column
+        print("This is not currently functional. Results are not correct.")
+        #TODO: calculate the average if you feel like it
     # from scipy.stats import zscore
 
     if MNI_template is None: #assume that we can find it here :-/
@@ -222,11 +235,16 @@ def plot_gene_expression(gene_expression_coords, MNI_template=None,
 
 
 def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_val=0,
-                                        expression_col_name="expression", summary_type="average",
-                                        donor_col_name='donor_id', verbose=False):
-    # compute summary metrics in provided mask
+                                        expression_col_name="expression", gene_symbol_col_name = "gene_symbol",
+                                        summary_type="average", donor_col_name='donor_id', verbose=False):
+    # compute summary metrics in provided mask, computes the summary per donor_id
     # mask is 3d, but can contiain multiple ids, I think I skip zero?
+    # currently assumes that ALL DATA IS FOR THE SAME GENE!!!
+    # TODO: iterate over multiple genes as well
+    # TODO: zfill, take index mapping to names
+
     import nibabel as nb
+    import numpy as np
     import pandas as pd
 
     img = nb.load(nii_mask)
@@ -241,14 +259,16 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
     donor_ids = gene_expression_coords[donor_col_name].unique()
 
     # create a dataframe to store the results
-    cols = [donor_col_name, "gene_symbol"]
+    cols = [donor_col_name, gene_symbol_col_name]
+    gene_symbols = np.unique(gene_expression_coords[gene_symbol_col_name])
+    gene_symbol = gene_symbols[0] #TODO: iterate over multiple genes, CURRENTLY ONLY TAKES A SINGLE ONE
+
     for mask_id in mask_ids:
         cols.append("mask_id_" + str(mask_id))
     index = np.arange(0, len(donor_ids))
     df_res = pd.DataFrame(columns=cols, index=index)
     df_res[donor_col_name] = donor_ids
     df_res = df_res.set_index(donor_col_name)
-
     for donor_id in donor_ids:
         gene_loc_d = np.zeros_like(mask_d)
 
@@ -277,6 +297,7 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
                 print("({:.2f})".format(expression_summary_val)),
             # return df_res
             df_res.loc[donor_id, "mask_id_" + str(mask_id)] = expression_summary_val
+            df_res.loc[donor_id, gene_symbol_col_name] = gene_symbol
         if verbose:
             print("")
     return df_res.reset_index()
@@ -328,7 +349,8 @@ def get_gene_expression_multi(df_probe_ids, df_donor_data,
     return gene_expression
 
 
-def ai_extract(gene_symbols=["NTRK2","MAG"],df_donor_data, df_probes, df_wells2MNI):
+def ai_extract(gene_symbols,df_donor_data, df_probes, df_wells2MNI):
+    #["NTRK2", "MAG"]
     # given genes, donor data, probe mapping, and well mapping to MNI space, return dataframe of gene expression and coordinates
     genes2probes = get_probe_ids(gene_symbols,df_probes)
     gene_expression = get_gene_expression_multi(genes2probes,df_donor_data)
