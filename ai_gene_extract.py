@@ -240,7 +240,7 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
     # compute summary metrics in provided mask, computes the summary per donor_id
     # mask is 3d, but can contiain multiple ids, I think I skip zero?
     # currently assumes that ALL DATA IS FOR THE SAME GENE!!!
-    # TODO: iterate over multiple genes as well
+    # TODO: test output??
     # TODO: zfill, take index mapping to names
 
     import nibabel as nb
@@ -261,46 +261,60 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
     # create a dataframe to store the results
     cols = [donor_col_name, gene_symbol_col_name]
     gene_symbols = np.unique(gene_expression_coords[gene_symbol_col_name])
-    gene_symbol = gene_symbols[0] #TODO: iterate over multiple genes, CURRENTLY ONLY TAKES A SINGLE ONE
+    #gene_symbol = gene_symbols[0] #TODO: iterate over multiple genes, CURRENTLY ONLY TAKES A SINGLE ONE
 
     for mask_id in mask_ids:
         cols.append("mask_id_" + str(mask_id))
     index = np.arange(0, len(donor_ids))
-    df_res = pd.DataFrame(columns=cols, index=index)
-    df_res[donor_col_name] = donor_ids
-    df_res = df_res.set_index(donor_col_name)
+    df_res_t = pd.DataFrame(columns=cols, index=index)
+    df_res = pd.DataFrame(columns=cols, index=None)
+    for gene_symbol in gene_symbols:
+        df_res_t[donor_col_name] = donor_ids
+        df_res_t[gene_symbol_col_name] = gene_symbol
+        df_res = pd.concat([df_res,df_res_t])
+    del df_res_t
+
+    df_res = df_res.set_index([donor_col_name,gene_symbol_col_name])
+#    df_res = pd.concat([df_res]*(len(gene_symbols)+1))
     for donor_id in donor_ids:
         gene_loc_d = np.zeros_like(mask_d)
 
         # put the data into the same 3d form that the mask is in
         print("Creating the 3d expression data from donor {0}".format(donor_id))
-        for index, row in gene_expression_coords[gene_expression_coords[donor_col_name] == donor_id].iterrows():
-            coord = row.values[-3:]  # XXX not the best way to do this :-/
-            coord = mm2vox(MNI_aff, coord)  # convert to voxel space for plotting
-            if np.isnan(row[expression_col_name]):
-                expression_val = nan_val
-            else:
-                expression_val = row[expression_col_name]
-                gene_loc_d[coord[0], coord[1], coord[2]] = expression_val
-                #   print(expression_val)
-        if verbose:
-            print("  Extracting mask data")
-            print("  mask_id (mean): "),
-        for mask_id in mask_ids:
+        for gene_symbol in gene_symbols: #TODO: change which data is pulled and then where it is put to include mutliple genes
             if verbose:
-                print(mask_id),
-            single_mask = np.logical_and(np.logical_not(np.isnan(mask_d)), mask_d == mask_id)
-            region = np.logical_and(gene_loc_d, single_mask)  # all voxels that have values and are within the mask
-            if summary_type is "average":
-                expression_summary_val = gene_loc_d[region].mean()
+                print("  Gene symbol: {}".format(gene_symbol))
+            gene_subset = gene_expression_coords[gene_expression_coords[gene_symbol_col_name]==gene_symbol] #select the current gene symbol
+
+            for index, row in gene_subset[gene_subset[donor_col_name] == donor_id].iterrows():
+                coord = row.values[-3:]  # XXX not the best way to do this :-/
+                coord = mm2vox(MNI_aff, coord)  # convert to voxel space for plotting
+                if np.isnan(row[expression_col_name]):
+                    expression_val = nan_val
+                else:
+                    expression_val = row[expression_col_name]
+                    gene_loc_d[coord[0], coord[1], coord[2]] = expression_val
+                    #   print(expression_val)
             if verbose:
-                print("({:.2f})".format(expression_summary_val)),
-            # return df_res
-            df_res.loc[donor_id, "mask_id_" + str(mask_id)] = expression_summary_val
-            df_res.loc[donor_id, gene_symbol_col_name] = gene_symbol
+                print("    Extracting mask data")
+                print("    mask_id (mean): "),
+            for mask_id in mask_ids:
+                if verbose:
+                    print(mask_id),
+                single_mask = np.logical_and(np.logical_not(np.isnan(mask_d)), mask_d == mask_id)
+                region = np.logical_and(gene_loc_d, single_mask)  # all voxels that have values and are within the mask
+                if summary_type is "average":
+                    expression_summary_val = gene_loc_d[region].mean()
+                if verbose:
+                    print("({:.2f})".format(expression_summary_val)),
+                df_res.loc[(donor_id, gene_symbol), "mask_id_" + str(mask_id)] = expression_summary_val
+            if verbose:
+                print("")
         if verbose:
             print("")
-    return df_res.reset_index()
+    df_res = df_res.reset_index()
+    df_res[df_res.columns[2:]]=df_res[df_res.columns[2:]].apply(pd.to_numeric) #convert data to numeric, from object type
+    return df_res
 
 
 def get_gene_expression_multi(df_probe_ids, df_donor_data,
