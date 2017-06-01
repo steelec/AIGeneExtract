@@ -234,7 +234,7 @@ def plot_gene_expression(gene_expression_coords, MNI_template=None,
                     smoothing_kernel) + "mm fwhm)" + " [" + gene_symbol + "]")
 
 
-def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_val=0,
+def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, subset_idx = None, nan_val=0,
                                         expression_col_name="expression", gene_symbol_col_name = "gene_symbol",
                                         summary_type="average", donor_col_name='donor_id', verbose=False):
     # compute summary metrics in provided mask, computes the summary per donor_id
@@ -253,15 +253,21 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
     vals = np.unique(mask_d)
     mask_ids = np.sort(vals[np.where(vals)]).astype(int)  # nonzero index values, sorted
 
+    if subset_idx is not None:
+        mask_ids = subset_idx
+
     if len(mask_ids) == 1:
         mask_ids = [mask_ids]
     # convert gene expression data to voxel space for all locations for each donor, then calculate the summary
     donor_ids = gene_expression_coords[donor_col_name].unique()
 
+    # # XXX FOR TESTING
+    # donor_ids = [donor_ids[0]]
+    # # XXX TODO:remove
+
     # create a dataframe to store the results
     cols = [donor_col_name, gene_symbol_col_name]
     gene_symbols = np.unique(gene_expression_coords[gene_symbol_col_name])
-    #gene_symbol = gene_symbols[0] #TODO: iterate over multiple genes, CURRENTLY ONLY TAKES A SINGLE ONE
 
     for mask_id in mask_ids:
         cols.append("mask_id_" + str(mask_id))
@@ -275,15 +281,18 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
     del df_res_t
 
     df_res = df_res.set_index([donor_col_name,gene_symbol_col_name])
-#    df_res = pd.concat([df_res]*(len(gene_symbols)+1))
+    # end creation of dataframe for storage of results
+
     for donor_id in donor_ids:
-        gene_loc_d = np.zeros_like(mask_d)
+#        gene_loc_d = np.zeros_like(mask_d)
 
         # put the data into the same 3d form that the mask is in
         print("Creating the 3d expression data from donor {0}".format(donor_id))
-        for gene_symbol in gene_symbols: #TODO: change which data is pulled and then where it is put to include mutliple genes
+        for gene_symbol in gene_symbols:
+            gene_loc_d = np.zeros_like(mask_d).astype(np.float64)
             if verbose:
                 print("  Gene symbol: {}".format(gene_symbol))
+
             gene_subset = gene_expression_coords[gene_expression_coords[gene_symbol_col_name]==gene_symbol] #select the current gene symbol
 
             for index, row in gene_subset[gene_subset[donor_col_name] == donor_id].iterrows():
@@ -294,7 +303,7 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
                 else:
                     expression_val = row[expression_col_name]
                     gene_loc_d[coord[0], coord[1], coord[2]] = expression_val
-                    #   print(expression_val)
+                    #print(expression_val)
             if verbose:
                 print("    Extracting mask data")
                 print("    mask_id (mean): "),
@@ -303,8 +312,13 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
                     print(mask_id),
                 single_mask = np.logical_and(np.logical_not(np.isnan(mask_d)), mask_d == mask_id)
                 region = np.logical_and(gene_loc_d, single_mask)  # all voxels that have values and are within the mask
+
+                if mask_id == 2:
+                    pass
+                    #return gene_loc_d, region
+
                 if summary_type is "average":
-                    expression_summary_val = gene_loc_d[region].mean()
+                    expression_summary_val = np.nanmean(gene_loc_d[region])
                 if verbose:
                     print("({:.2f})".format(expression_summary_val)),
                 df_res.loc[(donor_id, gene_symbol), "mask_id_" + str(mask_id)] = expression_summary_val
@@ -320,12 +334,14 @@ def get_gene_expression_summary_in_mask(nii_mask, gene_expression_coords, nan_va
 def get_gene_expression_multi(df_probe_ids, df_donor_data,
                               donor_col_name='donor_id', well_col_name='well_id',
                               probe_col_name='probe_id', gene_symbol_col_name="gene_symbol",
-                              mean_data=True):
+                              mean_data=True, zscore_by_gene = True):
     # pull gene expression across wells for the gene (df_probe_ids) provided
     # returns dataframe with donor_id, well_id, and average expression values for these probes per well
     # does this for multiple genes, returns all expression values and single column with mean expression value
 
     import pandas as pd
+    import numpy as np
+
     all_cols = list([donor_col_name])
     all_cols.append(gene_symbol_col_name)
     all_cols.append(well_col_name)
@@ -342,31 +358,173 @@ def get_gene_expression_multi(df_probe_ids, df_donor_data,
     for gene_symbol in gene_symbols:
         print("Collecting gene expression: [{0}]".format(gene_symbol))
         df_gene = df_probe_ids[df_probe_ids[gene_symbol_col_name] == gene_symbol]
-        if isinstance(df_gene[probe_col_name], (int, long)):  # XXX this case hasn't been tested as of yet
-            gene_expression = df_donor_data[[donor_col_name, well_col_name, df_gene[probe_col_name]]].copy()
-            gene_expression.insert(1, gene_symbol_col_name, gene_symbol)
-            gene_expression.insert(-1, "expression", df_gene[probe_col_name])  # just fill with the value of the probe
-        # gene_expression.rename(columns={probe_id:'expression'+"_"+gene_symbol},inplace=True) #this is the original data, just renamed since there is no average
+
+        print("  Averaging expression across {0} probes".format(len(list(df_gene[probe_col_name]))))
+        cols = list([donor_col_name])
+        cols.append(well_col_name)
+        cols.extend(list(df_gene[probe_col_name]))
+        df_donor_data_gene_probes = df_donor_data[cols].copy()
+        df_donor_data_gene_probes.insert(1, gene_symbol_col_name, gene_symbol)
+        if len(gene_expression) < 1:
+            gene_expression = df_donor_data_gene_probes.copy()
         else:
-            print("  Averaging expression across {0} probes".format(len(list(df_gene[probe_col_name]))))
-            cols = list([donor_col_name])
-            cols.append(well_col_name)
-            cols.extend(list(df_gene[probe_col_name]))
-            df_donor_data_gene_probes = df_donor_data[cols].copy()
-            df_donor_data_gene_probes.insert(1, gene_symbol_col_name, gene_symbol)
-            if len(gene_expression) < 1:
-                gene_expression = df_donor_data_gene_probes.copy()
-            else:
-                gene_expression = gene_expression.merge(df_donor_data_gene_probes, how='outer')
-                # gene_expression = gene_expression.assign(expression = gene_expression[df_gene[probe_col_name]].mean(axis=1))
-    gene_expression = gene_expression.assign(expression=gene_expression[df_probe_ids[probe_col_name]].mean(axis=1))
+            gene_expression = gene_expression.merge(df_donor_data_gene_probes, how='outer')
+
+    start_idx = np.argmax(gene_expression.columns == well_col_name) + 1  # start index for the first probe data is just after the well_id column
+    gene_expression = gene_expression.assign(expression=gene_expression.iloc[:, start_idx:].mean(axis=1))
+
+    if zscore_by_gene: #zscores within each donor and gene, I think. XXX
+        zscore = lambda x: (x - np.nanmean(x)) / np.nanstd(x)
+        gene_expression = gene_expression.assign(expression_zscore=gene_expression.groupby([donor_col_name,gene_symbol_col_name])['expression'].transform(zscore))
+
     return gene_expression
 
 
-def ai_extract(gene_symbols,df_donor_data, df_probes, df_wells2MNI):
+def extract(gene_symbols,df_donor_data, df_probes, df_wells2MNI):
     #["NTRK2", "MAG"]
     # given genes, donor data, probe mapping, and well mapping to MNI space, return dataframe of gene expression and coordinates
     genes2probes = get_probe_ids(gene_symbols,df_probes)
     gene_expression = get_gene_expression_multi(genes2probes,df_donor_data)
     gene_expression_coords = get_MNI_coords(gene_expression,df_wells2MNI)
     return gene_expression_coords
+
+def plot_genes_complex_radar(df_res,gene_symbol_col_name = "gene_symbol", zscored_data = True):
+
+    ## define radar plots for looking at expression in different regions
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns  # improves plot aesthetics
+
+    # Source: https://datascience.stackexchange.com/questions/6084/how-do-i-create-a-complex-radar-chart
+
+    def _invert(x, limits):
+        """inverts a value x on a scale from
+        limits[0] to limits[1]"""
+        return limits[1] - (x - limits[0])
+
+    def _scale_data(data, ranges):
+        """scales data[1:] to ranges[0],
+        inverts if the scale is reversed"""
+        # for d, (y1, y2) in zip(data[1:], ranges[1:]):
+        for d, (y1, y2) in zip(data, ranges):
+            assert (y1 <= d <= y2) or (y2 <= d <= y1)
+
+        x1, x2 = ranges[0]
+        d = data[0]
+
+        if x1 > x2:
+            d = _invert(d, (x1, x2))
+            x1, x2 = x2, x1
+
+        sdata = [d]
+
+        for d, (y1, y2) in zip(data[1:], ranges[1:]):
+            if y1 > y2:
+                d = _invert(d, (y1, y2))
+                y1, y2 = y2, y1
+
+            sdata.append((d - y1) / (y2 - y1) * (x2 - x1) + x1)
+
+        return sdata
+
+    def set_rgrids(self, radii, labels=None, angle=None, fmt=None,
+                   **kwargs):
+        """
+        Set the radial locations and labels of the *r* grids.
+        The labels will appear at radial distances *radii* at the
+        given *angle* in degrees.
+        *labels*, if not None, is a ``len(radii)`` list of strings of the
+        labels to use at each radius.
+        If *labels* is None, the built-in formatter will be used.
+        Return value is a list of tuples (*line*, *label*), where
+        *line* is :class:`~matplotlib.lines.Line2D` instances and the
+        *label* is :class:`~matplotlib.text.Text` instances.
+        kwargs are optional text properties for the labels:
+        %(Text)s
+        ACCEPTS: sequence of floats
+        """
+        # Make sure we take into account unitized data
+        radii = self.convert_xunits(radii)
+        radii = np.asarray(radii)
+        rmin = radii.min()
+        # if rmin <= 0:
+        #     raise ValueError('radial grids must be strictly positive')
+
+        self.set_yticks(radii)
+        if labels is not None:
+            self.set_yticklabels(labels)
+        elif fmt is not None:
+            self.yaxis.set_major_formatter(FormatStrFormatter(fmt))
+        if angle is None:
+            angle = self.get_rlabel_position()
+        self.set_rlabel_position(angle)
+        for t in self.yaxis.get_ticklabels():
+            t.update(kwargs)
+        return self.yaxis.get_gridlines(), self.yaxis.get_ticklabels()
+
+    class ComplexRadar():
+        def __init__(self, fig, variables, ranges,
+                     n_ordinate_levels=6):
+            angles = np.arange(0, 360, 360. / len(variables))
+
+            axes = [fig.add_axes([0.1, 0.1, 0.9, 0.9], polar=True,
+                                 label="axes{}".format(i))
+                    for i in range(len(variables))]
+            l, text = axes[0].set_thetagrids(angles,
+                                             labels=variables)
+            [txt.set_rotation(angle - 90) for txt, angle
+             in zip(text, angles)]
+            for ax in axes[1:]:
+                ax.patch.set_visible(False)
+                ax.grid("off")
+                ax.xaxis.set_visible(False)
+            for i, ax in enumerate(axes):
+                grid = np.linspace(*ranges[i],
+                                   num=n_ordinate_levels)
+                gridlabel = ["{}".format(round(x, 2))
+                             for x in grid]
+                if ranges[i][0] > ranges[i][1]:
+                    grid = grid[::-1]  # hack to invert grid
+                    # gridlabels aren't reversed
+                gridlabel[0] = ""  # clean up origin
+                # ax.set_rgrids(grid, labels=gridlabel, angle=angles[i])
+                set_rgrids(ax, grid, labels=gridlabel, angle=angles[i])
+                # ax.spines["polar"].set_visible(False)
+                ax.set_ylim(*ranges[i])
+            # variables for plotting
+            self.angle = np.deg2rad(np.r_[angles, angles[0]])
+            self.ranges = ranges
+            self.ax = axes[0]
+
+        def plot(self, data, *args, **kw):
+            sdata = _scale_data(data, self.ranges)
+            self.ax.plot(self.angle, np.r_[sdata, sdata[0]], *args, **kw)
+
+        def fill(self, data, *args, **kw):
+            sdata = _scale_data(data, self.ranges)
+            self.ax.fill(self.angle, np.r_[sdata, sdata[0]], *args, **kw)
+
+    regions = df_res.columns[2:]  # not great, but hey...
+
+    plot_d = df_res.groupby([gene_symbol_col_name])[regions].mean()
+    region_names = plot_d.columns
+    # XXX TODO: specify range by min and max of data --> etc: df_res['mask_id_2'].max()
+    if zscored_data:
+        my_range = [(-1, 1)]
+    else:
+        my_range = [(np.min(plot_d.values),np.max(plot_d.values))]
+    ranges = my_range * len(plot_d[region_names[0]])
+    variables = plot_d[region_names[0]].index.values  # gene names are variables, around the radar (list)
+
+    fig1 = plt.figure(figsize=(6, 6))
+    radar = ComplexRadar(fig1, variables, ranges)
+
+    for region in regions:
+        #print(region)
+        region_values = plot_d[region].values  # list of values asociated with genes
+        region_values[np.isnan(region_values)] = 0 #set NaNs to zero since we have no data for this mask region
+
+        radar.plot(region_values)
+        radar.fill(region_values, alpha=0.2)
+        radar.ax.legend(region_names, loc=(1, 1),  labelspacing=0.1, prop={'size': 15})
+    return fig1,radar
